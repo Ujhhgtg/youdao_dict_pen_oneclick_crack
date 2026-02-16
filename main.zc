@@ -109,7 +109,7 @@ fn get_path_parent(path: const string) -> String {
     return s.substring(0, (usize)last_sep)
 }
 
-fn run_exe_ret_is_success(exe_name: const string, args: Slice<string>) -> bool {
+fn exe_ret_success(exe_name: const string, args: Slice<string>) -> bool {
     let cmd = Command::new(exe_name)
     for arg in args {
         cmd.arg(arg)
@@ -239,10 +239,16 @@ fn ensure_working_dir() {
 
 fn main() {
     // embedded files
-    let exe_mke2fs_win = embed "../e2fsprogs/dist/mke2fs.com" as u8[]
-    let exe_debugfs_win = embed "../e2fsprogs/dist/debugfs.com" as u8[]
-    let exe_rkdevtool_linux = embed "../rkdeveloptool-rs/target/release/rkdeveloptool-rs" as u8[]
-    let exe_rkdevtool_win = embed "../rkdeveloptool-rs/target/x86_64-pc-windows-gnu/release/rkdeveloptool-rs.exe" as u8[]
+    let mke2fs_win_bytes = embed "../e2fsprogs/dist/mke2fs.com" as u8[]
+    let debugfs_win_bytes = embed "../e2fsprogs/dist/debugfs.com" as u8[]
+    let rkdevtool_linux_bytes = embed "../rkdeveloptool-rs/target/release/rkdeveloptool-rs" as u8[]
+    let rkdevtool_win_bytes = embed "../rkdeveloptool-rs/target/x86_64-pc-windows-gnu/release/rkdeveloptool-rs.exe" as u8[]
+    let startup_script_bytes = embed "./startup_script.sh" as u8[]
+
+    // 0. welcome
+    "--- welcome to the one-click youdao dictionary pen cracking tool ---"
+    "             --- by: Fey Xie <feyxiexzf@gmail.com> ---              "
+    ""
 
     // 1. get basic os info
 
@@ -262,22 +268,28 @@ fn main() {
     }
 
     // 2a. e2fsprogs
+    let mke2fs_path = ""
+    let debugfs_path = ""
     if os_kind.is_unix() {
         "info: os is unix, assuming that e2fsprogs is available"
+        mke2fs_path = "mke2fs"
+        debugfs_path = "debugfs"   
     }
     else {
         "info: os is windows, extracting embedded pre-compiled e2fsprogs..."
 
-        if write_bytes_to_file(exe_mke2fs_win, "res/mke2fs.com") {
+        if write_bytes_to_file(mke2fs_win_bytes, "res/mke2fs.com") {
             "info: wrote mke2fs exe"
+            mke2fs_path = "res/mke2fs.com"
         }
         else {
             !"error: failed to write mke2fs exe"
             return 1
         }
 
-        if write_bytes_to_file(exe_debugfs_win, "res/debugfs.com") {
+        if write_bytes_to_file(debugfs_win_bytes, "res/debugfs.com") {
             "info: wrote debugfs exe"
+            debugfs_path = "res/debugfs.com"
         }
         else {
             !"error: failed to write debugfs exe"
@@ -286,24 +298,25 @@ fn main() {
     }
 
     // 2b. rkdeveloptool
-    let use_rkdevtool_in_res = false
+    let rkdevtool_path = ""
     if os_kind.is_unix() {
         if File::exists("res/rkdeveloptool") {
             "info: found rkdeveloptool in res dir, using that"
-            use_rkdevtool_in_res = true
+            rkdevtool_path = "res/rkdeveloptool"
         }
         else {
-            !"warning: rkdeveloptool not found in res dir, continue searching..."
-            let args = ["-v", "rkdeveloptool"]
-            if run_exe_ret_is_success("command", Slice<string>::from_array(args, 2)) {
+            !"warning: rkdeveloptool not found in res dir, searching in PATH..."
+            let chk_rkdevtool_exist_args = ["-v", "rkdeveloptool"]
+            if exe_ret_success("command", Slice<string>::from_array(chk_rkdevtool_exist_args, 2)) {
+                rkdevtool_path = "rkdeveloptool"
                 "info: found rkdeveloptool in PATH, using that"
             }
             else {
                 !"warning: rkdeveloptool not found in PATH, extracting embedded pre-compiled binary..."
                 if os_kind.is_linux() {
-                    if write_bytes_to_file(exe_rkdevtool_linux, "res/rkdeveloptool") {
+                    if write_bytes_to_file(rkdevtool_linux_bytes, "res/rkdeveloptool") {
                         "info: wrote rkdeveloptool exe, using that"
-                        use_rkdevtool_in_res = true
+                        rkdevtool_path = "res/rkdeveloptool"
                     }
                     else {
                         !"error: failed to write rkdeveloptool exe"
@@ -322,19 +335,20 @@ fn main() {
     else {
         if File::exists("res/rkdeveloptool.exe") {
             "info: found rkdeveloptool in res dir, using that"
-            use_rkdevtool_in_res = true
+            rkdevtool_path = "res/rkdeveloptool.exe"
         }
         else {
-            !"warning: rkdeveloptool not found in PATH, extracting embedded pre-compiled binary..."
+            // not gonna search for rkdevtool in PATH on windows since PATH is basically useless there
+            !"warning: rkdeveloptool not found in res dir, extracting embedded pre-compiled binary..."
             if !os_arch_kind.is_x86_64() {
                 !"warning: os arch is not x86_64, will run rkdeveloptool under system compatability layer"
                 "         rkdeveloptool may not work properly. if that's the case,"
                 "         please build/download rkdeveloptool yourself and put it in res/rkdeveloptool.exe"
             }
 
-            if write_bytes_to_file(exe_rkdevtool_win, "res/rkdeveloptool.exe") {
+            if write_bytes_to_file(rkdevtool_win_bytes, "res/rkdeveloptool.exe") {
                 "info: wrote rkdeveloptool exe, using that"
-                use_rkdevtool_in_res = true
+                rkdevtool_path = "res/rkdeveloptool.exe"
             }
             else {
                 !"error: failed to write rkdeveloptool exe"
@@ -344,4 +358,118 @@ fn main() {
     }
 
     // 3. create image
+    if os_kind.is_unix() {
+        let dd_args = ["if=/dev/zero", "of=userdisk.img", "bs=1M", "count=1024"]
+        if exe_ret_success("dd", Slice<string>::from_array(dd_args, 4)) {
+            "info: successfully created 1GiB userdisk.img"
+        }
+        else {
+            !"error: failed to create image"
+            return 1
+        }
+    }
+    else {
+        let fsutil_args = ["file", "createnew", "userdisk.img", "1073741824"]
+        if exe_ret_success("fsutil", Slice<string>::from_array(fsutil_args, 4)) {
+            "info: successfully created 1GiB userdisk.img"
+        }
+        else {
+            !"error: failed to create image"
+            return 1
+        }
+    }
+
+    // 4. create filesystem
+    let mke2fs_args = ["-F", "-L", "userdisk", "-O", "^has_journal,^metadata_csum,^64bit", "-m", "0", "userdisk.img"]
+    if exe_ret_success(mke2fs_path, Slice<string>::from_array(mke2fs_args, 8)) {
+        "info: successfully created ext4 filesystem on userdisk.img"
+    }
+    else {
+        !"error: failed to create filesystem on image"
+        return 1
+    }
+
+    // 5. save script
+    if write_bytes_to_file(startup_script_bytes, "res/startup_script.sh") {
+        "info: saved startup script locally"
+    }
+    else {
+        !"error: failed to wrote startup script locally"
+        return 1
+    }
+
+    // 6. add script into image
+    // FIXME: zen c struggles to transpile this, resulting to re-definition of struct Slice<string>
+    // let debugfs_args_1 = ["-w", "-R", "mkdir /skip_re", "userdisk.img"]
+    // let debugfs_args_2 = ["-w", "-R", "write res/startup_script.sh /skip_re/skip_login.sh", "userdisk.img"]
+    // let debugfs_args_3 = ["-w", "-R", "sif /skip_re/skip_login.sh mode 0100755", "userdisk.img"]
+    // let debugfs_args_list = [
+    //     Slice<string>::from_array(debugfs_args_1, 4),
+    //     Slice<string>::from_array(debugfs_args_2, 4),
+    //     Slice<string>::from_array(debugfs_args_3, 4)
+    // ]
+    // FIXME: zen c is so confused that it even couldnt transpile this correctly
+    // let debugfs_args_list = [
+    //     ["-w", "-R", "mkdir /skip_re", "userdisk.img"],
+    //     ["-w", "-R", "write res/startup_script.sh /skip_re/skip_login.sh", "userdisk.img"],
+    //     ["-w", "-R", "sif /skip_re/skip_login.sh mode 0100755", "userdisk.img"]
+    // ]
+    // for debugfs_args in debugfs_args_list {
+    //     let args_slice = Slice<string>::from_array(debugfs_args, 4)
+    //     if exe_ret_success(debugfs_path, args_slice) {
+    //         "info: successfully manipulated image"
+    //     }
+    //     else {
+    //         !"error: failed to manipulate image"
+    //         return 1
+    //     }
+    // }
+    let debugfs_args_1 = ["-w", "-R", "\"mkdir", "/skip_re\"", "userdisk.img"]
+    let debugfs_args_2 = ["-w", "-R", "\"write", "res/startup_script.sh", "/skip_re/skip_login.sh\"", "userdisk.img"]
+    let debugfs_args_3 = ["-w", "-R", "\"sif", "/skip_re/skip_login.sh", "mode", "0100755\"", "userdisk.img"]
+    if exe_ret_success(debugfs_path, Slice<string>::from_array(debugfs_args_1, 5)) {
+        "info: successfully manipulated image [1/3]"
+    }
+    if exe_ret_success(debugfs_path, Slice<string>::from_array(debugfs_args_2, 6)) {
+        "info: successfully manipulated image [2/3]"
+    }
+    if exe_ret_success(debugfs_path, Slice<string>::from_array(debugfs_args_3, 7)) {
+        "info: successfully manipulated image [3/3]"
+    }
+
+    // 7. upload image to device
+    "info: image prepared successfully"
+    "      about to upload image to device"
+    ""
+    "      please:"
+    "      1. shutdown the device"
+    "      2. hold the home button for ~1.5 seconds"
+    "      3. plug the device into your pc"
+    "      4. release the home button"
+    ""
+    "      note:"
+    "      if upload fails, you probably need to run this with sudo/as administrator"
+    ""
+    "      to confirm, enter 'yes' below"
+    let confirm_input = "";
+    ? "prompt: confirm to upload image to device? (yes/no) " (confirm_input);
+    if confirm_input != "yes" {
+        "info: ok canceled"
+        return 1
+    }
+    let rkdevtool_args = ["wlx", "userdisk", "userdisk.img"]
+    if exe_ret_success(rkdevtool_path, Slice<string>::from_array(rkdevtool_args, 3)) {
+        "info: successfully uploaded image"
+    }
+    else {
+        !"error: failed to upload image; read the notes above for possible solutions"
+        return 1
+    }
+
+    // 8. post-installation
+    "info: your device should now be cracked!"
+    "      long-press power button to reboot it"
+    "      click on the 'about -> legal regulatory' page in device settings for 5 times to enable usb access"
+    "      then, after you acquire the adb shell,"
+    "      execute 'resize2fs /userdisk' inside to restore stock partition size"
 }
