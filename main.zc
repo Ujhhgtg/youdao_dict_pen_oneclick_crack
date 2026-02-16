@@ -1,5 +1,6 @@
 import "cosmo.h" as cosmo
 include "sys/utsname.h"
+include "sys/stat.h"
 import "std/process.zc"
 import "std/slice.zc"
 import "std/string.zc"
@@ -308,8 +309,8 @@ fn main() {
             !"warning: rkdeveloptool not found in res dir, searching in PATH..."
             let chk_rkdevtool_exist_args = ["-v", "rkdeveloptool"]
             if exe_ret_success("command", Slice<string>::from_array(chk_rkdevtool_exist_args, 2)) {
-                rkdevtool_path = "rkdeveloptool"
                 "info: found rkdeveloptool in PATH, using that"
+                rkdevtool_path = "rkdeveloptool"
             }
             else {
                 !"warning: rkdeveloptool not found in PATH, extracting embedded pre-compiled binary..."
@@ -317,6 +318,14 @@ fn main() {
                     if write_bytes_to_file(rkdevtool_linux_bytes, "res/rkdeveloptool") {
                         "info: wrote rkdeveloptool exe, using that"
                         rkdevtool_path = "res/rkdeveloptool"
+                        let chmod_rkdevtool_args = ["755", "res/rkdeveloptool"]
+                        if exe_ret_success("chmod", Slice<string>::from_array(chmod_rkdevtool_args, 2)) {
+                            "info: added execution permission on res/rkdeveloptool"
+                        }
+                        else {
+                            !"error: failed to add execution permission on res/rkdeveloptool"
+                            return 1
+                        }
                     }
                     else {
                         !"error: failed to write rkdeveloptool exe"
