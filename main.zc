@@ -1,0 +1,347 @@
+import "cosmo.h" as cosmo
+include "sys/utsname.h"
+import "std/process.zc"
+import "std/slice.zc"
+import "std/string.zc"
+import "std/path.zc"
+import "std/fs.zc"
+import "std/result.zc"
+import "std/option.zc"
+
+enum OsKind {
+    Windows,
+    MacOs,
+    Linux,
+    FreeBsd,
+    OpenBsd,
+    NetBsd,
+    Unknown
+}
+
+// TODO: zen c currently doesn't have Rust-style `let EnumValue1(enum_value_1) = some_enum` pattern matching,
+//       so im just writing helper functions for enums
+impl OsKind {
+    fn is_unix(self) -> bool {
+        match *self {
+            OsKind::Windows => { return false },
+            OsKind::Unknown => { return false },
+            _ => { return true },
+        }
+    }
+
+    fn is_linux(self) -> bool {
+        match *self {
+            OsKind::Linux => { return true },
+            _ => { return false },
+        }
+    }
+
+    fn is_windows(self) -> bool {
+        match *self {
+            OsKind::Windows => { return true },
+            _ => { return false },
+        }
+    }
+
+    fn to_string(self) -> string {
+        match *self {
+            OsKind::Windows => { return "Windows" },
+            OsKind::MacOs => { return "macOS" },
+            OsKind::Linux => { return "Linux" },
+            OsKind::FreeBsd => { return "FreeBSD" },
+            OsKind::OpenBsd => { return "OpenBSD" },
+            OsKind::NetBsd => { return "NetBSD" },
+            OsKind::Unknown => { return "Unknown" },
+        }  
+    }
+}
+
+enum OsArchKind {
+    x86_64,
+    aarch64,
+    Unknown
+}
+
+// TODO: zen c currently doesn't have Rust-style `let EnumValue1(enum_value_1) = some_enum` pattern matching,
+//       so im just writing helper functions for enums
+impl OsArchKind {
+    fn is_x86_64(self) -> bool {
+        match *self {
+            OsArchKind::x86_64 => { return true },
+            _ => { return false },
+        }
+    }
+
+    fn is_aarch64(self) -> bool {
+        match *self {
+            OsArchKind::aarch64 => { return true },
+            _ => { return false },
+        }
+    }
+
+    fn to_string(self) -> string {  
+        match *self {  
+            OsArchKind::x86_64 => { return "x86_64" },  
+            OsArchKind::aarch64 => { return "aarch64" },  
+            OsArchKind::Unknown => { return "Unknown" },  
+        }  
+    }
+}
+
+fn get_path_parent(path: const string) -> String {
+    autofree let s = String::from(path)
+
+    let last_sep: isize = -1
+    let i: usize = 0
+    while i < s.length() {
+        let c = path[i]
+        // paths on windows is normalized to unix-style by cosmopolitan, so only '/'
+        if c == '/' {
+            last_sep = (isize)i
+        }
+        i = i + 1
+    }
+
+    if last_sep < 0 {
+        return String::from("")
+    }
+
+    return s.substring(0, (usize)last_sep)
+}
+
+fn run_exe_ret_is_success(exe_name: const string, args: Slice<string>) -> bool {
+    let cmd = Command::new(exe_name)
+    for arg in args {
+        cmd.arg(arg)
+    }
+    return cmd.status() == 0
+}
+
+fn write_bytes_to_file(bytes: u8[], path: const string) -> bool {
+    let fp: FILE* = fopen(path, "wb")
+    if fp == 0 {
+        !"error: failed to open file for writing"
+        return false
+    }
+
+    if bytes.data != 0 && bytes.len > 0 {
+        if fwrite(bytes.data, sizeof(u8), bytes.len, fp) != (usize)bytes.len {
+            !"error: failed to write 'data' array to file"
+            fclose(fp)
+            return false
+        }
+    }
+
+    if fclose(fp) == EOF {
+        !"error: failed to close file after writing"
+        return false
+    }
+
+    return true
+}
+
+fn create_dir(path: const string) -> bool {
+    if !File::exists(path) {
+        let result = File::create_dir(path)
+        if result.is_err() || !result.unwrap() {
+            return false
+        }
+        return true
+    }
+
+    let meta_result = File::metadata(path)
+    if meta_result.is_err() || !meta_result.unwrap().is_dir {
+        !"warning: found file instead of dir, removing..."
+        let result = File::remove_file(path)
+        if result.is_err() || !result.unwrap() {
+            !"error: failed to remove file"
+            return false
+        }
+        // try creating again
+        return create_dir(path)
+    }
+    return true
+}
+
+fn get_current_os_kind() -> OsKind {
+    let os_kind = OsKind::Unknown()
+    if cosmo::IsWindows() {
+        os_kind = OsKind::Windows()
+    } else if (cosmo::IsXnu()) {
+        os_kind = OsKind::MacOs()
+    } else if (cosmo::IsLinux()) {
+        os_kind = OsKind::Linux()
+    } else if (cosmo::IsFreebsd()) {
+        os_kind = OsKind::FreeBsd()
+    } else if (cosmo::IsOpenbsd()) {
+        os_kind = OsKind::OpenBsd()
+    } else if (cosmo::IsNetbsd()) {
+        os_kind = OsKind::NetBsd()
+    } else {
+        os_kind = OsKind::Unknown()
+    }
+    return os_kind
+}
+
+fn get_current_os_arch_kind() -> OsArchKind {
+    let is_x86_64 = false
+    let is_aarch64 = false
+    let uname_success = false
+
+    raw {
+        struct utsname uname_info;
+        if (uname(&uname_info) == 0) {
+            uname_success = true;
+            if (strcmp(uname_info.machine, "x86_64") == 0) {
+                is_x86_64 = true;
+            } else if (strcmp(uname_info.machine, "aarch64") == 0) {
+                is_aarch64 = true;
+            }
+        }
+    }
+
+    if !uname_success {
+        !"error: failed to get uname info"
+        return OsArchKind::Unknown()
+    }
+
+    if is_x86_64 {
+        return OsArchKind::x86_64()
+    }
+    
+    if is_aarch64 {
+        return OsArchKind::aarch64()
+    }
+
+    return OsArchKind::Unknown()
+}
+
+fn ensure_working_dir() {
+    let cur_file_cstr: const string = cosmo::GetProgramExecutableName()
+    "debug: current exe file: {cur_file_cstr}"
+    // TODO: zen c's Path::parent() seems broken, so using my own impl for now
+    
+    // let cur_file_path = Path::new(cur_file_cstr)
+    // let cur_dir_cstr = cur_file_path.parent()
+    //     .expect("error: couldnt determine current exe dir")
+    //     .c_str()
+    autofree let cur_dir_str: const String = get_path_parent(cur_file_cstr)
+    let cur_dir_cstr: const string = cur_dir_str.c_str()
+    
+    if cur_dir_cstr == "" {
+        !"error: couldnt determine current exe dir"
+        exit(1)
+    }
+    "debug: current exe dir: {cur_dir_cstr}"
+    chdir(cur_dir_cstr)
+    "debug: changed working dir to exe dir"
+}
+
+fn main() {
+    // embedded files
+    let exe_mke2fs_win = embed "../e2fsprogs/dist/mke2fs.com" as u8[]
+    let exe_debugfs_win = embed "../e2fsprogs/dist/debugfs.com" as u8[]
+    let exe_rkdevtool_linux = embed "../rkdeveloptool-rs/target/release/rkdeveloptool-rs" as u8[]
+    let exe_rkdevtool_win = embed "../rkdeveloptool-rs/target/x86_64-pc-windows-gnu/release/rkdeveloptool-rs.exe" as u8[]
+
+    // 1. get basic os info
+
+    // 1a. os
+    let os_kind = get_current_os_kind()
+    "debug: current os kind is {os_kind.to_string()}"
+
+    // 1b. os arch
+    let os_arch_kind = get_current_os_arch_kind()
+    "debug: current os arch kind is {os_arch_kind.to_string()}"
+
+    // 2. extract embedded files if needed
+    ensure_working_dir()
+    if !create_dir("res") {
+        !"error: failed to create res dir for extracting embedded resources"
+        return 1
+    }
+
+    // 2a. e2fsprogs
+    if os_kind.is_unix() {
+        "info: os is unix, assuming that e2fsprogs is available"
+    }
+    else {
+        "info: os is windows, extracting embedded pre-compiled e2fsprogs..."
+
+        if write_bytes_to_file(exe_mke2fs_win, "res/mke2fs.com") {
+            "info: wrote mke2fs exe"
+        }
+        else {
+            !"error: failed to write mke2fs exe"
+            return 1
+        }
+
+        if write_bytes_to_file(exe_debugfs_win, "res/debugfs.com") {
+            "info: wrote debugfs exe"
+        }
+        else {
+            !"error: failed to write debugfs exe"
+            return 1
+        }
+    }
+
+    // 2b. rkdeveloptool
+    let use_rkdevtool_in_res = false
+    if os_kind.is_unix() {
+        if File::exists("res/rkdeveloptool") {
+            "info: found rkdeveloptool in res dir, using that"
+            use_rkdevtool_in_res = true
+        }
+        else {
+            !"warning: rkdeveloptool not found in res dir, continue searching..."
+            let args = ["-v", "rkdeveloptool"]
+            if run_exe_ret_is_success("command", Slice<string>::from_array(args, 2)) {
+                "info: found rkdeveloptool in PATH, using that"
+            }
+            else {
+                !"warning: rkdeveloptool not found in PATH, extracting embedded pre-compiled binary..."
+                if os_kind.is_linux() {
+                    if write_bytes_to_file(exe_rkdevtool_linux, "res/rkdeveloptool") {
+                        "info: wrote rkdeveloptool exe, using that"
+                        use_rkdevtool_in_res = true
+                    }
+                    else {
+                        !"error: failed to write rkdeveloptool exe"
+                        return 1
+                    }
+                }
+                else {
+                    !"error: os is unix but not linux"
+                    !"       prebuilt binaries are only provided for linux"
+                    !"       please please build/download rkdeveloptool yourself and put it in res/rkdeveloptool"
+                    return 1
+                }
+            }
+        }
+    }
+    else {
+        if File::exists("res/rkdeveloptool.exe") {
+            "info: found rkdeveloptool in res dir, using that"
+            use_rkdevtool_in_res = true
+        }
+        else {
+            !"warning: rkdeveloptool not found in PATH, extracting embedded pre-compiled binary..."
+            if !os_arch_kind.is_x86_64() {
+                !"warning: os arch is not x86_64, will run rkdeveloptool under system compatability layer"
+                "         rkdeveloptool may not work properly. if that's the case,"
+                "         please build/download rkdeveloptool yourself and put it in res/rkdeveloptool.exe"
+            }
+
+            if write_bytes_to_file(exe_rkdevtool_win, "res/rkdeveloptool.exe") {
+                "info: wrote rkdeveloptool exe, using that"
+                use_rkdevtool_in_res = true
+            }
+            else {
+                !"error: failed to write rkdeveloptool exe"
+                return 1
+            }
+        }
+    }
+
+    // 3. create image
+}
