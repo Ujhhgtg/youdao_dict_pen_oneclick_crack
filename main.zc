@@ -1,6 +1,5 @@
 import "cosmo.h" as cosmo
 include "sys/utsname.h"
-include "sys/stat.h"
 import "std/process.zc"
 import "std/slice.zc"
 import "std/string.zc"
